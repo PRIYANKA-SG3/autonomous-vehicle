@@ -1,0 +1,135 @@
+import ch.ethz.idsc.sophus.app.api.GeodesicDisplay;
+import ch.ethz.idsc.sophus.app.api.GeodesicDisplays;
+import ch.ethz.idsc.sophus.app.api.PathRender;
+import ch.ethz.idsc.sophus.app.io.GokartPoseDataV2;
+import ch.ethz.idsc.sophus.app.io.GokartPoseDatas;
+import ch.ethz.idsc.sophus.app.util.SpinnerLabel;
+import ch.ethz.idsc.sophus.crv.subdiv.Hermite3Filter;
+import ch.ethz.idsc.sophus.lie.se2.Se2BiinvariantMean;
+import ch.ethz.idsc.sophus.lie.se2.Se2Group;
+import ch.ethz.idsc.sophus.lie.se2c.Se2CoveringExponential;
+import ch.ethz.idsc.sophus.math.Do;
+import ch.ethz.idsc.sophus.math.TensorIteration;
+import ch.ethz.idsc.tensor.RationalScalar;
+import ch.ethz.idsc.tensor.RealScalar;
+import ch.ethz.idsc.tensor.Scalar;
+import ch.ethz.idsc.tensor.Tensor;
+import ch.ethz.idsc.tensor.Tensors;
+import ch.ethz.idsc.tensor.alg.Range;
+import ch.ethz.idsc.tensor.sca.Power;
+
+import java.awt.*;
+import java.awt.geom.Path2D;
+import java.awt.geom.Rectangle2D;
+import java.util.Arrays;
+import javax.swing.JToggleButton;
+
+class DatasetFilterVisualization extends GeodesicDatasetDemo {
+    private static final int FRAME_WIDTH = 640;
+    private static final int FRAME_HEIGHT = 360;
+    private static final Color CURVE_COLOR = new Color(255, 128, 128, 255);
+    private static final Color SHAPE_COLOR = new Color(128, 128, 128, 255);
+
+    private final PathRender curveRenderer = new PathRender(CURVE_COLOR);
+    private final PathRender shapeRenderer = new PathRender(SHAPE_COLOR, 2f);
+
+    private final GokartPoseDataV2 poseData;
+    private final SpinnerLabel<Integer> skipSelector = new SpinnerLabel<>();
+    private final SpinnerLabel<Integer> levelSelector = new SpinnerLabel<>();
+    private final JToggleButton toggleAdjoint = new JToggleButton("Adjoint");
+    private final JToggleButton toggleDerivatives = new JToggleButton("Derivatives");
+    protected Tensor controlData = Tensors.empty();
+
+    public DatasetFilterVisualization(GokartPoseDataV2 poseData) {
+        super(GeodesicDisplays.SE2_ONLY, poseData);
+        this.poseData = poseData;
+        timerFrame.geometricComponent.setModel2Pixel(GokartPoseDatas.HANGAR_MODEL2PIXEL);
+
+        skipSelector.setList(Arrays.asList(1, 2, 5, 10, 25, 50));
+        skipSelector.setValue(5);
+        skipSelector.addToComponentReduced(timerFrame.jToolBar, new Dimension(50, 28), "Skips");
+        skipSelector.addSpinnerListener(type -> updateState());
+
+        levelSelector.setList(Arrays.asList(0, 1, 2, 3, 4, 5, 6));
+        levelSelector.setValue(1);
+        levelSelector.addToComponentReduced(timerFrame.jToolBar, new Dimension(40, 28), "Levels");
+
+        timerFrame.jToolBar.addSeparator();
+        timerFrame.jToolBar.add(toggleAdjoint);
+        toggleDerivatives.setSelected(true);
+        toggleDerivatives.setToolTipText("Show Derivatives");
+        timerFrame.jToolBar.add(toggleDerivatives);
+
+        updateState();
+    }
+
+    @Override
+    protected void updateState() {
+        int limit = spinnerLabelLimit.getValue();
+        String datasetName = spinnerLabelString.getValue();
+        Tensor rawData = poseData.getPoseVel(datasetName, limit);
+        Tensor processedData = Tensors.empty();
+        int skips = skipSelector.getValue();
+        for (int index = 0; index < rawData.length(); index += skips) {
+            processedData.append(rawData.get(index));
+        }
+        controlData = processedData;
+    }
+
+    @Override
+    public void render(GeometricLayer geometricLayer, Graphics2D graphics) {
+        GraphicsUtil.setQualityHigh(graphics);
+        GeodesicDisplay geodesicDisplay = geodesicDisplay();
+
+        final Tensor shape = geodesicDisplay.shape().multiply(RealScalar.of(0.3));
+        curveRenderer.setCurve(controlData.get(Tensor.ALL, 0), false).render(geometricLayer, graphics);
+
+        if (controlData.length() <= 1000) {
+            for (Tensor point : controlData.get(Tensor.ALL, 0)) {
+                geometricLayer.pushMatrix(geodesicDisplay.matrixLift(point));
+                Path2D path2d = geometricLayer.toPath2D(shape);
+                path2d.closePath();
+                graphics.setColor(new Color(255, 128, 128, 64));
+                graphics.fill(path2d);
+                graphics.setColor(CURVE_COLOR);
+                graphics.draw(path2d);
+                geometricLayer.popMatrix();
+            }
+        }
+
+        graphics.setColor(Color.DARK_GRAY);
+        Scalar delta = RationalScalar.of(skipSelector.getValue(), 50);
+        TensorIteration tensorIteration = new Hermite3Filter(Se2Group.INSTANCE, Se2CoveringExponential.INSTANCE, Se2BiinvariantMean.FILTER)
+                .string(delta, controlData);
+        int refinementLevels = 2 * levelSelector.getValue();
+        Tensor refinedData = Do.of(tensorIteration::iterate, refinementLevels);
+
+        for (Tensor point : refinedData.get(Tensor.ALL, 0)) {
+            geometricLayer.pushMatrix(geodesicDisplay.matrixLift(point));
+            Path2D path2d = geometricLayer.toPath2D(shape);
+            path2d.closePath();
+            graphics.setColor(new Color(128, 255, 128, 64));
+            graphics.fill(path2d);
+            graphics.setColor(CURVE_COLOR);
+            graphics.draw(path2d);
+            geometricLayer.popMatrix();
+        }
+
+        shapeRenderer.setCurve(refinedData.get(Tensor.ALL, 0), false).render(geometricLayer, graphics);
+
+        if (toggleDerivatives.isSelected()) {
+            Tensor derivatives = refinedData.get(Tensor.ALL, 1);
+            if (0 < derivatives.length()) {
+                JFreeChart chart = StaticHelper.listPlot(derivatives, Range.of(0, derivatives.length())
+                        .multiply(delta)
+                        .divide(Power.of(2, refinementLevels)));
+                Dimension size = timerFrame.geometricComponent.jComponent.getSize();
+                chart.draw(graphics, new Rectangle2D.Double(size.width - FRAME_WIDTH, 0, FRAME_WIDTH, FRAME_HEIGHT));
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        new DatasetFilterVisualization(GokartPoseDataV2.RACING_DAY).setVisible(1000, 800);
+    }
+}
