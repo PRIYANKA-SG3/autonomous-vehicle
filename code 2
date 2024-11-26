@@ -1,0 +1,207 @@
+Backend: Flask Server
+Step 1: Install Required Libraries
+Run the following commands to install dependencies:
+
+bash
+Copy code
+pip install flask flask-cors sqlalchemy
+Step 2: Backend Code
+Save this code in a file named server.py.
+
+python
+Copy code
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from sqlalchemy import create_engine, Column, Integer, Boolean
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+
+# Flask App Initialization
+app = Flask(__name__)
+CORS(app)
+
+# Database Setup
+DATABASE_URL = "sqlite:///vehicle_data.db"
+engine = create_engine(DATABASE_URL)
+Base = declarative_base()
+
+# Data Model
+class VehicleData(Base):
+    __tablename__ = "vehicle_data"
+    id = Column(Integer, primary_key=True)
+    distance = Column(Integer, nullable=False)
+    obstacle = Column(Boolean, nullable=False)
+
+Base.metadata.create_all(engine)
+Session = sessionmaker(bind=engine)
+session = Session()
+
+# Endpoint to Save Data
+@app.route("/data", methods=["POST"])
+def save_data():
+    try:
+        data = request.json
+        distance = data.get("distance")
+        obstacle = data.get("obstacle")
+        
+        # Save to DB
+        new_entry = VehicleData(distance=distance, obstacle=obstacle)
+        session.add(new_entry)
+        session.commit()
+
+        return jsonify({"message": "Data saved successfully!"}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Endpoint to Retrieve Data
+@app.route("/data", methods=["GET"])
+def get_data():
+    entries = session.query(VehicleData).all()
+    result = [{"id": e.id, "distance": e.distance, "obstacle": e.obstacle} for e in entries]
+    return jsonify(result)
+
+# Run Server
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
+Frontend: Web Dashboard
+Save the following code as index.html.
+
+html
+Copy code
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vehicle Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body>
+  <h1>Vehicle Telemetry Dashboard</h1>
+  <canvas id="distanceChart" width="600" height="400"></canvas>
+  <div>
+    <h2>Obstacle Logs</h2>
+    <ul id="logs"></ul>
+  </div>
+
+  <script>
+    const apiUrl = "http://127.0.0.1:5000/data";
+
+    // Fetch Data
+    async function fetchData() {
+      const response = await axios.get(apiUrl);
+      return response.data;
+    }
+
+    // Update Chart
+    async function updateChart(chart) {
+      const data = await fetchData();
+      const distances = data.map(d => d.distance);
+      const labels = data.map(d => `ID: ${d.id}`);
+      const obstacles = data.map(d => d.obstacle);
+
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = distances;
+      chart.update();
+
+      // Update logs
+      const logs = document.getElementById('logs');
+      logs.innerHTML = "";
+      data.forEach(entry => {
+        const li = document.createElement('li');
+        li.innerText = `ID: ${entry.id}, Distance: ${entry.distance}, Obstacle: ${entry.obstacle ? 'Yes' : 'No'}`;
+        logs.appendChild(li);
+      });
+    }
+
+    // Create Chart
+    const ctx = document.getElementById('distanceChart').getContext('2d');
+    const distanceChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Distance (cm)',
+          data: [],
+          borderColor: 'blue',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        scales: {
+          y: { beginAtZero: true }
+        }
+      }
+    });
+
+    // Update Every 2 Seconds
+    setInterval(() => updateChart(distanceChart), 2000);
+  </script>
+</body>
+</html>
+Client: ESP32 Microcontroller
+Use this code for the microcontroller (ESP32).
+
+cpp
+Copy code
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <NewPing.h>
+
+// WiFi Configuration
+const char* ssid = "Your_SSID";
+const char* password = "Your_PASSWORD";
+
+// Server URL
+const char* serverUrl = "http://192.168.x.x:5000/data"; // Replace with server IP
+
+// Ultrasonic Sensor Configuration
+#define TRIG_PIN 12
+#define ECHO_PIN 14
+#define MAX_DISTANCE 200
+NewPing sonar(TRIG_PIN, ECHO_PIN, MAX_DISTANCE);
+
+void setup() {
+  Serial.begin(115200);
+
+  // Connect to WiFi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+}
+
+void loop() {
+  // Measure Distance
+  int distance = sonar.ping_cm();
+  bool obstacle = distance > 0 && distance < 20;
+
+  // Send Data to Server
+  sendData(distance, obstacle);
+
+  delay(2000);
+}
+
+void sendData(int distance, bool obstacle) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(serverUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    String jsonData = "{\"distance\":" + String(distance) + ",\"obstacle\":" + (obstacle ? "true" : "false") + "}";
+    int httpResponseCode = http.POST(jsonData);
+
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.println("Server Response: " + response);
+    } else {
+      Serial.println("Error Sending Data: " + String(httpResponseCode));
+    }
+    http.end();
+  } else {
+    Serial.println("WiFi Disconnected");
+  }
+}
