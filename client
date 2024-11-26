@@ -1,0 +1,100 @@
+Microcontroller Integration
+Modify the IoT part of the ESP32 code to send data to the backend instead of a cloud service.
+
+cpp
+Copy code
+const char* serverUrl = "http://<backend_server_ip>:5000/data";
+
+// Function to Send Data to Backend
+void sendDataToBackend(int distance, bool obstacle) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(serverUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    String json = "{\"distance\":" + String(distance) + ",\"obstacle\":" + String(obstacle) + "}";
+    int httpResponseCode = http.POST(json);
+
+    if (httpResponseCode > 0) {
+      Serial.println("Data sent to backend successfully");
+    } else {
+      Serial.println("Error sending data: " + String(httpResponseCode));
+    }
+    http.end();
+  } else {
+    Serial.println("WiFi Disconnected!");
+  }
+}
+Frontend: Real-Time Dashboard
+Technology Stack
+HTML, CSS, and JavaScript
+Chart.js for data visualization
+Axios for REST API calls
+Frontend Code
+html
+Copy code
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Autonomous Vehicle Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body>
+  <h1>Autonomous Vehicle Dashboard</h1>
+  <canvas id="distanceChart" width="400" height="200"></canvas>
+
+  <script>
+    const apiUrl = "http://<backend_server_ip>:5000/data";
+
+    // Fetch data from the backend
+    async function fetchData() {
+      const response = await axios.get(apiUrl);
+      return response.data;
+    }
+
+    // Update the chart with new data
+    async function updateChart(chart) {
+      const data = await fetchData();
+      const distances = data.map(d => d.distance);
+      const labels = data.map(d => `ID: ${d.id}`);
+
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = distances;
+      chart.update();
+    }
+
+    // Create a chart
+    const ctx = document.getElementById('distanceChart').getContext('2d');
+    const distanceChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Distance (cm)',
+          data: [],
+          borderColor: 'blue',
+          borderWidth: 1
+        }]
+      }
+    });
+
+    // Update the chart every 2 seconds
+    setInterval(() => updateChart(distanceChart), 2000);
+  </script>
+</body>
+</html>
+How to Run the Project
+Backend:
+
+Save the Python script as backend.py.
+Run the server: python backend.py.
+Microcontroller:
+
+Flash the ESP32/ESP8266 with the Arduino code.
+Frontend:
+
+Save the HTML file and open it in a browser.
+Replace <backend_server_ip> with your backend server's IP address.
